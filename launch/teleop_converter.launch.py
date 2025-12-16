@@ -17,10 +17,12 @@ def generate_launch_description():
                 'bucket_deadzone': 0.05,
                 
                 # 角度映射范围（度）
-                'arm_angle_min': -60.0,
-                'arm_angle_max': 60.0,
-                'shovel_angle_min': -60.0,
-                'shovel_angle_max': 60.0,
+                # 大臂范围：-800~800
+                # 铲斗范围：-800~800
+                'arm_angle_min': -800.0,
+                'arm_angle_max': 800.0,
+                'shovel_angle_min': -800.0,
+                'shovel_angle_max': 800.0,
                 
                 # 速度限制（m/s）
                 'max_speed': 3.0,

@@ -11,6 +11,7 @@ find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sa_msgs REQUIRED)
 find_package(Protobuf REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
 
 # 查找 nlohmann_json（如果找不到，使用简单的字符串解析）
 find_package(nlohmann_json QUIET)
@@ -31,6 +32,12 @@ file(GLOB_RECURSE PROTOBUF_SOURCES
   "${CANNODE_PROTOBUF_DIR}/*.pb.cc"
 )
 
+# 生成自定义消息
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/VehicleCommand.msg"
+  DEPENDENCIES std_msgs
+)
+
 # 添加可执行文件
 add_executable(teleop2can_transformer 
   src/teleop_converter.cpp
@@ -48,6 +55,10 @@ ament_target_dependencies(teleop2can_transformer
   std_msgs
   sa_msgs
 )
+
+# 链接消息库
+rosidl_target_interfaces(teleop2can_transformer
+  ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
 # 安装
 install(TARGETS

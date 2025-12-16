@@ -70,7 +70,7 @@
 ### 映射关系
 
 #### 映射到输出的字段
-- `steering: [-1, 1]` → `steering_target: [-100, 100]%`（反向映射）
+- `steering: [-1, 1]` → `steering_target: [-800, 800]`（反向映射）
 - `throttle: [0, 1]` → `throttle: [0, 100]%`
 - `brake: [0, 1]` → `brake: [0, 100]%`
 - `gear: "N"/"D"/"R"` → `gear_location: 2(N)/1(D)/3(R)`
@@ -121,7 +121,7 @@
 - `bucket_deadzone`: 铲斗死区（默认 0.05）
 - `arm_angle_min`: 大臂最小角度（度，默认 -60.0）
 - `arm_angle_max`: 大臂最大角度（度，默认 60.0）
-- `shovel_angle_min`: 铲斗最小角度（度，默认 -60.0）
+- `shovel_angle_min`: 铲斗最小角度（度，默认 0.0）
 - `shovel_angle_max`: 铲斗最大角度（度，默认 60.0）
 - `max_speed`: 最大速度（m/s，默认 3.0）
 
@@ -169,11 +169,11 @@ python3 src/teleoptocantransformer/scripts/test_converter.py
    - 关键辅助信号：gear ('N'/'D'/'R'), speed_mode ('turtle'/'rabbit'), emergency_stop, parking_brake, horn, light_code, hydraulic_lock, power_enable
 
 2. **验证输出信息及范围**（参考 `control_cmd.proto` 和 cannode 实现）
-   - steering_target: [-100, 100]%
+   - steering_target: [-800, 800]
    - throttle: [0, 100]%
    - brake: [0, 100]%
    - arm_angle: [0, 60]°（cannode限制）
-   - shovel_angle: [-60, 60]°
+   - shovel_angle: [0, 60]°
    - gear_location: 1(D), 2(N), 3(R)
    - speed: [-max_speed, max_speed] m/s（根据 speed_mode 调整）
 

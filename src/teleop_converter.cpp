@@ -1,6 +1,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <sa_msgs/msg/proto_adapter.hpp>
+#include "teleoptocantransformer/msg/vehicle_command.hpp"
 #include <rclcpp/qos.hpp>
 #include <chrono>
 #include <cmath>
@@ -28,10 +29,12 @@ public:
         this->declare_parameter<double>("bucket_deadzone", 0.05);
         
         // 角度映射范围（度）
-        this->declare_parameter<double>("arm_angle_min", -60.0);
-        this->declare_parameter<double>("arm_angle_max", 60.0);
-        this->declare_parameter<double>("shovel_angle_min", -60.0);
-        this->declare_parameter<double>("shovel_angle_max", 60.0);
+        // 大臂范围：-800~800
+        // 铲斗范围：-800~800
+        this->declare_parameter<double>("arm_angle_min", -800.0);
+        this->declare_parameter<double>("arm_angle_max", 800.0);
+        this->declare_parameter<double>("shovel_angle_min", -800.0);
+        this->declare_parameter<double>("shovel_angle_max", 800.0);
         
         // 速度限制（m/s）
         this->declare_parameter<double>("max_speed", 3.0);
@@ -73,9 +76,16 @@ public:
             vehicle_cmd_qos
         );
         
+        // 创建非序列化消息发布者（用于调试和查看）
+        vehicle_cmd_debug_pub_ = this->create_publisher<teleoptocantransformer::msg::VehicleCommand>(
+            "/vehicle_command_debug",
+            vehicle_cmd_qos
+        );
+        
         RCLCPP_INFO(this->get_logger(), "QoS 配置: /controls/teleop (BEST_EFFORT), /vehicle_command (RELIABLE)");
         RCLCPP_INFO(this->get_logger(), "订阅话题: /controls/teleop");
-        RCLCPP_INFO(this->get_logger(), "发布话题: /vehicle_command");
+        RCLCPP_INFO(this->get_logger(), "发布话题: /vehicle_command (序列化)");
+        RCLCPP_INFO(this->get_logger(), "发布话题: /vehicle_command_debug (非序列化，可用 ros2 topic echo 查看)");
         
         // 使用定时器定期检查连接状态
         auto connection_check_timer = this->create_wall_timer(
@@ -157,7 +167,7 @@ private:
             header->set_timestamp_sec(now.seconds());
             header->set_frame_id("base_link");
             
-            // 处理转向控制 (steering: -1..1 -> steering_target: -100..100)
+            // 处理转向控制 (steering: -1..1 -> steering_target: -800..800)
             // 支持新格式的 steering 字段
             if (data.find("steering") != data.end()) {
                 double steering_input = clamp(SimpleJsonParser::get_double(data["steering"]), -1.0, 1.0);
@@ -165,9 +175,9 @@ private:
                 // 应用死区
                 steering_input = apply_deadzone(steering_input, steering_deadzone_);
                 
-                // 映射到百分比范围 [-100, 100]
+                // 映射到角度范围 [-800, 800]
                 // 注意：根据 Python 脚本，转向是反向的
-                double steering_target = -steering_input * 100.0;
+                double steering_target = -steering_input * 800.0;
                 cmd.set_steering_target(steering_target);
                 last_steering_ = steering_target;
             } else {
@@ -199,24 +209,26 @@ private:
                 RCLCPP_DEBUG(this->get_logger(), "收到 stick: %.2f (保留格式，不映射)", stick);
             }
             
-            // 处理油门控制 (throttle: 0..1 -> throttle: 0..100)
+            // 处理油门控制 (throttle: -1..1 -> throttle: 200..0，反向映射)
             if (data.find("throttle") != data.end()) {
-                double throttle_input = clamp(SimpleJsonParser::get_double(data["throttle"]), 0.0, 1.0);
+                double throttle_input = clamp(SimpleJsonParser::get_double(data["throttle"]), -1.0, 1.0);
                 throttle_input = apply_deadzone(throttle_input, throttle_deadzone_);
-                double throttle_percent = throttle_input * 100.0;
-                cmd.set_throttle(throttle_percent);
-                last_throttle_ = throttle_percent;
+                // 映射：-1 -> 200, 1 -> 0
+                double throttle_value = (1.0 - throttle_input) / 2.0 * 200.0;
+                cmd.set_throttle(throttle_value);
+                last_throttle_ = throttle_value;
             } else {
                 cmd.set_throttle(last_throttle_);
             }
             
-            // 处理刹车控制 (brake: 0..1 -> brake: 0..100)
+            // 处理刹车控制 (brake: -1..1 -> brake: 1000..0，反向映射)
             if (data.find("brake") != data.end()) {
-                double brake_input = clamp(SimpleJsonParser::get_double(data["brake"]), 0.0, 1.0);
+                double brake_input = clamp(SimpleJsonParser::get_double(data["brake"]), -1.0, 1.0);
                 brake_input = apply_deadzone(brake_input, brake_deadzone_);
-                double brake_percent = brake_input * 100.0;
-                cmd.set_brake(brake_percent);
-                last_brake_ = brake_percent;
+                // 映射：-1 -> 1000, 1 -> 0
+                double brake_value = (1.0 - brake_input) / 2.0 * 1000.0;
+                cmd.set_brake(brake_value);
+                last_brake_ = brake_value;
             } else {
                 cmd.set_brake(last_brake_);
             }
@@ -236,12 +248,12 @@ private:
                 cmd.set_parking_brake(SimpleJsonParser::get_bool(data["parking_brake"]));
             }
             
-            // 处理大臂控制 (boom: -1..1 -> arm_angle: 角度范围)
+            // 处理大臂控制 (boom: -1..1 -> arm_angle: -800~800度)
             if (data.find("boom") != data.end()) {
                 double boom_input = clamp(SimpleJsonParser::get_double(data["boom"]), -1.0, 1.0);
                 boom_input = apply_deadzone(boom_input, boom_deadzone_);
                 
-                // 映射到角度范围（度）
+                // 映射到角度范围（度）：-1 -> -800，1 -> 800
                 double arm_angle = boom_input * (arm_angle_max_ - arm_angle_min_) / 2.0 + 
                                   (arm_angle_max_ + arm_angle_min_) / 2.0;
                 cmd.set_arm_angle(arm_angle);
@@ -252,12 +264,12 @@ private:
                 cmd.set_arm_enable(false);
             }
             
-            // 处理铲斗控制 (bucket: -1..1 -> shovel_angle: 角度范围)
+            // 处理铲斗控制 (bucket: -1..1 -> shovel_angle: -800~800度)
             if (data.find("bucket") != data.end()) {
                 double bucket_input = clamp(SimpleJsonParser::get_double(data["bucket"]), -1.0, 1.0);
                 bucket_input = apply_deadzone(bucket_input, bucket_deadzone_);
                 
-                // 映射到角度范围（度）
+                // 映射到角度范围（度）：-1 -> 800（因为反向），1 -> -800
                 // 注意：根据 Python 脚本，bucket 是反向的
                 double shovel_angle = -bucket_input * (shovel_angle_max_ - shovel_angle_min_) / 2.0 + 
                                      (shovel_angle_max_ + shovel_angle_min_) / 2.0;
@@ -319,9 +331,9 @@ private:
             if (cmd.has_throttle() && cmd.has_gear_location()) {
                 double speed = 0.0;
                 if (cmd.gear_location() == control::canbus::Chassis::GEAR_DRIVE) {
-                    speed = (cmd.throttle() / 100.0) * effective_max_speed;
+                    speed = (cmd.throttle() / 200.0) * effective_max_speed;
                 } else if (cmd.gear_location() == control::canbus::Chassis::GEAR_REVERSE) {
-                    speed = -(cmd.throttle() / 100.0) * effective_max_speed;
+                    speed = -(cmd.throttle() / 200.0) * effective_max_speed;
                 }
                 cmd.set_speed(speed);
             }
@@ -329,25 +341,25 @@ private:
             // 打印转换后的输出信息
             RCLCPP_INFO(this->get_logger(), "📤 转换后的控制命令:");
             
-            // 转向 (steering_target: [-100, 100]%)
+            // 转向 (steering_target: [-800, 800])
             double steering_target = cmd.steering_target();
-            RCLCPP_INFO(this->get_logger(), "   转向 (steering_target): %.2f%%", steering_target);
-            if (steering_target < -100.0 || steering_target > 100.0) {
-                RCLCPP_WARN(this->get_logger(), "     ⚠ 警告: steering_target 超出范围 [-100, 100]%%");
+            RCLCPP_INFO(this->get_logger(), "   转向 (steering_target): %.2f", steering_target);
+            if (steering_target < -800.0 || steering_target > 800.0) {
+                RCLCPP_WARN(this->get_logger(), "     ⚠ 警告: steering_target 超出范围 [-800, 800]");
             }
             
-            // 油门 (throttle: [0, 100]%)
+            // 油门 (throttle: [0, 200])
             double throttle = cmd.throttle();
-            RCLCPP_INFO(this->get_logger(), "   油门 (throttle): %.2f%%", throttle);
-            if (throttle < 0.0 || throttle > 100.0) {
-                RCLCPP_WARN(this->get_logger(), "     ⚠ 警告: throttle 超出范围 [0, 100]%%");
+            RCLCPP_INFO(this->get_logger(), "   油门 (throttle): %.2f", throttle);
+            if (throttle < 0.0 || throttle > 200.0) {
+                RCLCPP_WARN(this->get_logger(), "     ⚠ 警告: throttle 超出范围 [0, 200]");
             }
             
-            // 刹车 (brake: [0, 100]%)
+            // 刹车 (brake: [0, 1000])
             double brake = cmd.brake();
-            RCLCPP_INFO(this->get_logger(), "   刹车 (brake): %.2f%%", brake);
-            if (brake < 0.0 || brake > 100.0) {
-                RCLCPP_WARN(this->get_logger(), "     ⚠ 警告: brake 超出范围 [0, 100]%%");
+            RCLCPP_INFO(this->get_logger(), "   刹车 (brake): %.2f", brake);
+            if (brake < 0.0 || brake > 1000.0) {
+                RCLCPP_WARN(this->get_logger(), "     ⚠ 警告: brake 超出范围 [0, 1000]");
             }
             
             // 档位字符串
@@ -364,7 +376,7 @@ private:
                 RCLCPP_INFO(this->get_logger(), "   目标速度 (speed): %.2f m/s", cmd.speed());
             }
             
-            // 大臂角度 (arm_angle: [0, 60]°，cannode限制)
+            // 大臂角度 (arm_angle: [-800, 800]°)
             if (cmd.has_arm_angle()) {
                 double arm_angle = cmd.arm_angle();
                 if (cmd.arm_enable()) {
@@ -372,12 +384,12 @@ private:
                 } else {
                     RCLCPP_INFO(this->get_logger(), "   大臂角度 (arm_angle): %.2f° [禁用]", arm_angle);
                 }
-                if (arm_angle < 0.0 || arm_angle > 60.0) {
-                    RCLCPP_WARN(this->get_logger(), "     ⚠ 警告: arm_angle 超出 cannode 限制范围 [0, 60]°");
+                if (arm_angle < -800.0 || arm_angle > 800.0) {
+                    RCLCPP_WARN(this->get_logger(), "     ⚠ 警告: arm_angle 超出范围 [-800, 800]°");
                 }
             }
             
-            // 铲斗角度 (shovel_angle: 通常 [-60, 60]°)
+            // 铲斗角度 (shovel_angle: [-800, 800]°)
             if (cmd.has_shovel_angle()) {
                 double shovel_angle = cmd.shovel_angle();
                 if (cmd.shovel_enable()) {
@@ -385,8 +397,8 @@ private:
                 } else {
                     RCLCPP_INFO(this->get_logger(), "   铲斗角度 (shovel_angle): %.2f° [禁用]", shovel_angle);
                 }
-                if (shovel_angle < -60.0 || shovel_angle > 60.0) {
-                    RCLCPP_WARN(this->get_logger(), "     ⚠ 警告: shovel_angle 超出常见范围 [-60, 60]°");
+                if (shovel_angle < -800.0 || shovel_angle > 800.0) {
+                    RCLCPP_WARN(this->get_logger(), "     ⚠ 警告: shovel_angle 超出范围 [-800, 800]°");
                 }
             }
             
@@ -438,12 +450,31 @@ private:
             std::string serialized_data;
             cmd.SerializeToString(&serialized_data);
             
-            // 创建 ROS2 消息并发布
+            // 创建 ROS2 消息并发布（序列化版本）
             auto ros_msg = sa_msgs::msg::ProtoAdapter();
             ros_msg.pb.assign(serialized_data.begin(), serialized_data.end());
             vehicle_cmd_pub_->publish(ros_msg);
             
+            // 创建并发布非序列化消息（用于调试和查看）
+            auto debug_msg = teleoptocantransformer::msg::VehicleCommand();
+            debug_msg.header.stamp = this->now();
+            debug_msg.header.frame_id = "base_link";
+            debug_msg.steering_target = cmd.steering_target();
+            debug_msg.throttle = cmd.throttle();
+            debug_msg.brake = cmd.brake();
+            debug_msg.gear_location = static_cast<int32_t>(cmd.gear_location());
+            debug_msg.speed = cmd.has_speed() ? cmd.speed() : 0.0;
+            debug_msg.arm_angle = cmd.has_arm_angle() ? cmd.arm_angle() : 0.0;
+            debug_msg.arm_enable = cmd.has_arm_angle() ? cmd.arm_enable() : false;
+            debug_msg.shovel_angle = cmd.has_shovel_angle() ? cmd.shovel_angle() : 0.0;
+            debug_msg.shovel_enable = cmd.has_shovel_angle() ? cmd.shovel_enable() : false;
+            debug_msg.estop = cmd.has_estop() ? cmd.estop() : false;
+            debug_msg.parking_brake = cmd.has_parking_brake() ? cmd.parking_brake() : false;
+            debug_msg.engine_on_off = cmd.has_engine_on_off() ? cmd.engine_on_off() : false;
+            vehicle_cmd_debug_pub_->publish(debug_msg);
+            
             RCLCPP_INFO(this->get_logger(), "✅ 已发布到 /vehicle_command (protobuf 大小: %zu 字节)", serialized_data.size());
+            RCLCPP_INFO(this->get_logger(), "✅ 已发布到 /vehicle_command_debug (非序列化消息)");
             RCLCPP_INFO(this->get_logger(), "============================================================");
             
         } catch (const std::exception& e) {
@@ -454,6 +485,7 @@ private:
     // 订阅者和发布者
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr teleop_sub_;
     rclcpp::Publisher<sa_msgs::msg::ProtoAdapter>::SharedPtr vehicle_cmd_pub_;
+    rclcpp::Publisher<teleoptocantransformer::msg::VehicleCommand>::SharedPtr vehicle_cmd_debug_pub_;
     
     // 死区参数
     double steering_deadzone_;
