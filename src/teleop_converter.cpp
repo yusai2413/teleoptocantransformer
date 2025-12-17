@@ -34,6 +34,7 @@ public:
         this->declare_parameter<bool>("publish_vehicle_command", true);         // 是否发布 /vehicle_command
         this->declare_parameter<bool>("publish_vehicle_command_debug", true);   // 是否发布 /vehicle_command_debug
         this->declare_parameter<bool>("publish_chassis_feedback", true);        // 是否发布 cannode/chassis_feedback
+        this->declare_parameter<bool>("verbose_log", false);                    // 是否打印详细日志，默认关闭以降低CPU
         
         // 角度映射范围（度）
         // 大臂范围：-800~800
@@ -60,6 +61,7 @@ public:
         publish_vehicle_command_ = this->get_parameter("publish_vehicle_command").as_bool();
         publish_vehicle_command_debug_ = this->get_parameter("publish_vehicle_command_debug").as_bool();
         publish_chassis_feedback_ = this->get_parameter("publish_chassis_feedback").as_bool();
+        verbose_log_ = this->get_parameter("verbose_log").as_bool();
         
         // 创建订阅者（订阅远程端控制指令）
         // 使用 BEST_EFFORT QoS 以匹配发布者（参考 keyboard_piston_joint_publisher_2_updated.py）
@@ -140,6 +142,7 @@ public:
                     publish_vehicle_command_ ? "true" : "false",
                     publish_vehicle_command_debug_ ? "true" : "false",
                     publish_chassis_feedback_ ? "true" : "false");
+        RCLCPP_INFO(this->get_logger(), "详细日志: verbose_log=%s (默认关闭以降低CPU)", verbose_log_ ? "true" : "false");
     }
 
 private:
@@ -217,9 +220,9 @@ private:
         // 0x18FF0005
         oss << "\"walk_motor_current\":" << msg.walk_motor_current << ",";
         oss << "\"walk_motor_torque\":" << msg.walk_motor_torque << ",";
-        // 车辆速度 = 行走电机反馈速度 * 0.0122
+        // 车辆速度 = 行走电机反馈速度 * 3.6 （直接按输入值换算）
         oss << "\"walk_motor_speed\":" << msg.walk_motor_speed << ",";
-        oss << "\"vehicle_speed\":" << msg.walk_motor_speed * 0.0122 << ",";
+        oss << "\"vehicle_speed\":" << msg.walk_motor_speed * 3.6 << ",";
         oss << "\"walk_motor_enable\":" << bool_to_str(msg.walk_motor_enable) << ",";
 
         // 0x18FF0006
@@ -286,12 +289,16 @@ private:
     
     void teleop_callback(const std_msgs::msg::String::SharedPtr msg)
     {
-        RCLCPP_INFO(this->get_logger(), "🔔 回调函数被调用！");
+        if (verbose_log_) {
+            RCLCPP_INFO(this->get_logger(), "🔔 回调函数被调用！");
+        }
         try {
             // 打印接收到的原始输入
-            RCLCPP_INFO(this->get_logger(), "============================================================");
-            RCLCPP_INFO(this->get_logger(), "📥 收到控制指令: %s", msg->data.c_str());
-            RCLCPP_INFO(this->get_logger(), "📥 消息长度: %zu 字节", msg->data.length());
+            if (verbose_log_) {
+                RCLCPP_INFO(this->get_logger(), "============================================================");
+                RCLCPP_INFO(this->get_logger(), "📥 收到控制指令: %s", msg->data.c_str());
+                RCLCPP_INFO(this->get_logger(), "📥 消息长度: %zu 字节", msg->data.length());
+            }
             
             // 解析 JSON
             std::map<std::string, std::string> data = SimpleJsonParser::parse(msg->data);
@@ -478,111 +485,113 @@ private:
                 cmd.set_speed(speed);
             }
             
-            // 打印转换后的输出信息
-            RCLCPP_INFO(this->get_logger(), "📤 转换后的控制命令:");
-            
-            // 转向 (steering_target: [-800, 800])
-            double steering_target = cmd.steering_target();
-            RCLCPP_INFO(this->get_logger(), "   转向 (steering_target): %.2f", steering_target);
-            if (steering_target < -800.0 || steering_target > 800.0) {
-                RCLCPP_WARN(this->get_logger(), "     ⚠ 警告: steering_target 超出范围 [-800, 800]");
-            }
-            
-            // 油门 (throttle: [0, 200])
-            double throttle = cmd.throttle();
-            RCLCPP_INFO(this->get_logger(), "   油门 (throttle): %.2f", throttle);
-            if (throttle < 0.0 || throttle > 200.0) {
-                RCLCPP_WARN(this->get_logger(), "     ⚠ 警告: throttle 超出范围 [0, 200]");
-            }
-            
-            // 刹车 (brake: [350, 3900])
-            double brake = cmd.brake();
-            RCLCPP_INFO(this->get_logger(), "   刹车 (brake): %.2f", brake);
-            if (brake < 350.0 || brake > 3900.0) {
-                RCLCPP_WARN(this->get_logger(), "     ⚠ 警告: brake 超出范围 [350, 3900]");
-            }
-            
-            // 档位字符串
-            std::string gear_str = "UNKNOWN";
-            switch(cmd.gear_location()) {
-                case control::canbus::Chassis::GEAR_DRIVE: gear_str = "D(前进)"; break;
-                case control::canbus::Chassis::GEAR_REVERSE: gear_str = "R(后退)"; break;
-                case control::canbus::Chassis::GEAR_NEUTRAL: gear_str = "N(空档)"; break;
-                default: gear_str = "N(空档)"; break;
-            }
-            RCLCPP_INFO(this->get_logger(), "   档位 (gear_location): %s (%d)", gear_str.c_str(), static_cast<int>(cmd.gear_location()));
-            
-            if (cmd.has_speed()) {
-                RCLCPP_INFO(this->get_logger(), "   目标速度 (speed): %.2f m/s", cmd.speed());
-            }
-            
-            // 大臂角度 (arm_angle: [-800, 800]°)
-            if (cmd.has_arm_angle()) {
-                double arm_angle = cmd.arm_angle();
-                if (cmd.arm_enable()) {
-                    RCLCPP_INFO(this->get_logger(), "   大臂角度 (arm_angle): %.2f° [启用]", arm_angle);
-                } else {
-                    RCLCPP_INFO(this->get_logger(), "   大臂角度 (arm_angle): %.2f° [禁用]", arm_angle);
+            // 打印转换后的输出信息（仅在 verbose 模式下打印，减少CPU）
+            if (verbose_log_) {
+                RCLCPP_INFO(this->get_logger(), "📤 转换后的控制命令:");
+                
+                // 转向 (steering_target: [-800, 800])
+                double steering_target = cmd.steering_target();
+                RCLCPP_INFO(this->get_logger(), "   转向 (steering_target): %.2f", steering_target);
+                if (steering_target < -800.0 || steering_target > 800.0) {
+                    RCLCPP_WARN(this->get_logger(), "     ⚠ 警告: steering_target 超出范围 [-800, 800]");
                 }
-                if (arm_angle < -800.0 || arm_angle > 800.0) {
-                    RCLCPP_WARN(this->get_logger(), "     ⚠ 警告: arm_angle 超出范围 [-800, 800]°");
+                
+                // 油门 (throttle: [0, 200])
+                double throttle = cmd.throttle();
+                RCLCPP_INFO(this->get_logger(), "   油门 (throttle): %.2f", throttle);
+                if (throttle < 0.0 || throttle > 200.0) {
+                    RCLCPP_WARN(this->get_logger(), "     ⚠ 警告: throttle 超出范围 [0, 200]");
                 }
-            }
-            
-            // 铲斗角度 (shovel_angle: [-800, 800]°)
-            if (cmd.has_shovel_angle()) {
-                double shovel_angle = cmd.shovel_angle();
-                if (cmd.shovel_enable()) {
-                    RCLCPP_INFO(this->get_logger(), "   铲斗角度 (shovel_angle): %.2f° [启用]", shovel_angle);
-                } else {
-                    RCLCPP_INFO(this->get_logger(), "   铲斗角度 (shovel_angle): %.2f° [禁用]", shovel_angle);
+                
+                // 刹车 (brake: [350, 3900])
+                double brake = cmd.brake();
+                RCLCPP_INFO(this->get_logger(), "   刹车 (brake): %.2f", brake);
+                if (brake < 350.0 || brake > 3900.0) {
+                    RCLCPP_WARN(this->get_logger(), "     ⚠ 警告: brake 超出范围 [350, 3900]");
                 }
-                if (shovel_angle < -800.0 || shovel_angle > 800.0) {
-                    RCLCPP_WARN(this->get_logger(), "     ⚠ 警告: shovel_angle 超出范围 [-800, 800]°");
+                
+                // 档位字符串
+                std::string gear_str = "UNKNOWN";
+                switch(cmd.gear_location()) {
+                    case control::canbus::Chassis::GEAR_DRIVE: gear_str = "D(前进)"; break;
+                    case control::canbus::Chassis::GEAR_REVERSE: gear_str = "R(后退)"; break;
+                    case control::canbus::Chassis::GEAR_NEUTRAL: gear_str = "N(空档)"; break;
+                    default: gear_str = "N(空档)"; break;
                 }
-            }
-            
-            if (cmd.has_estop()) {
-                RCLCPP_INFO(this->get_logger(), "   紧急停止 (estop): %s", cmd.estop() ? "是" : "否");
-            }
-            
-            if (cmd.has_parking_brake()) {
-                RCLCPP_INFO(this->get_logger(), "   驻车制动 (parking_brake): %s", cmd.parking_brake() ? "是" : "否");
-            }
-            
-            if (cmd.has_engine_on_off()) {
-                RCLCPP_INFO(this->get_logger(), "   发动机 (engine_on_off): %s", cmd.engine_on_off() ? "开启" : "关闭");
-            }
-            
-            // 打印新格式字段（保留格式但不映射到输出）
-            if (data.find("leftTrack") != data.end() || data.find("rightTrack") != data.end() ||
-                data.find("swing") != data.end() || data.find("stick") != data.end() ||
-                data.find("speed_mode") != data.end() || data.find("light_code") != data.end() ||
-                data.find("hydraulic_lock") != data.end() || data.find("horn") != data.end()) {
-                RCLCPP_INFO(this->get_logger(), "   新格式字段（保留格式，不映射到输出）:");
-                if (data.find("leftTrack") != data.end()) {
-                    RCLCPP_INFO(this->get_logger(), "     leftTrack: %.2f", SimpleJsonParser::get_double(data["leftTrack"]));
+                RCLCPP_INFO(this->get_logger(), "   档位 (gear_location): %s (%d)", gear_str.c_str(), static_cast<int>(cmd.gear_location()));
+                
+                if (cmd.has_speed()) {
+                    RCLCPP_INFO(this->get_logger(), "   目标速度 (speed): %.2f m/s", cmd.speed());
                 }
-                if (data.find("rightTrack") != data.end()) {
-                    RCLCPP_INFO(this->get_logger(), "     rightTrack: %.2f", SimpleJsonParser::get_double(data["rightTrack"]));
+                
+                // 大臂角度 (arm_angle: [-800, 800]°)
+                if (cmd.has_arm_angle()) {
+                    double arm_angle = cmd.arm_angle();
+                    if (cmd.arm_enable()) {
+                        RCLCPP_INFO(this->get_logger(), "   大臂角度 (arm_angle): %.2f° [启用]", arm_angle);
+                    } else {
+                        RCLCPP_INFO(this->get_logger(), "   大臂角度 (arm_angle): %.2f° [禁用]", arm_angle);
+                    }
+                    if (arm_angle < -800.0 || arm_angle > 800.0) {
+                        RCLCPP_WARN(this->get_logger(), "     ⚠ 警告: arm_angle 超出范围 [-800, 800]°");
+                    }
                 }
-                if (data.find("swing") != data.end()) {
-                    RCLCPP_INFO(this->get_logger(), "     swing: %.2f", SimpleJsonParser::get_double(data["swing"]));
+                
+                // 铲斗角度 (shovel_angle: [-800, 800]°)
+                if (cmd.has_shovel_angle()) {
+                    double shovel_angle = cmd.shovel_angle();
+                    if (cmd.shovel_enable()) {
+                        RCLCPP_INFO(this->get_logger(), "   铲斗角度 (shovel_angle): %.2f° [启用]", shovel_angle);
+                    } else {
+                        RCLCPP_INFO(this->get_logger(), "   铲斗角度 (shovel_angle): %.2f° [禁用]", shovel_angle);
+                    }
+                    if (shovel_angle < -800.0 || shovel_angle > 800.0) {
+                        RCLCPP_WARN(this->get_logger(), "     ⚠ 警告: shovel_angle 超出范围 [-800, 800]°");
+                    }
                 }
-                if (data.find("stick") != data.end()) {
-                    RCLCPP_INFO(this->get_logger(), "     stick: %.2f", SimpleJsonParser::get_double(data["stick"]));
+                
+                if (cmd.has_estop()) {
+                    RCLCPP_INFO(this->get_logger(), "   紧急停止 (estop): %s", cmd.estop() ? "是" : "否");
                 }
-                if (data.find("speed_mode") != data.end()) {
-                    RCLCPP_INFO(this->get_logger(), "     speed_mode: %s", data["speed_mode"].c_str());
+                
+                if (cmd.has_parking_brake()) {
+                    RCLCPP_INFO(this->get_logger(), "   驻车制动 (parking_brake): %s", cmd.parking_brake() ? "是" : "否");
                 }
-                if (data.find("light_code") != data.end()) {
-                    RCLCPP_INFO(this->get_logger(), "     light_code: 0x%02X", SimpleJsonParser::get_int(data["light_code"]));
+                
+                if (cmd.has_engine_on_off()) {
+                    RCLCPP_INFO(this->get_logger(), "   发动机 (engine_on_off): %s", cmd.engine_on_off() ? "开启" : "关闭");
                 }
-                if (data.find("hydraulic_lock") != data.end()) {
-                    RCLCPP_INFO(this->get_logger(), "     hydraulic_lock: %s", SimpleJsonParser::get_bool(data["hydraulic_lock"]) ? "true" : "false");
-                }
-                if (data.find("horn") != data.end()) {
-                    RCLCPP_INFO(this->get_logger(), "     horn: %s", SimpleJsonParser::get_bool(data["horn"]) ? "true" : "false");
+                
+                // 打印新格式字段（保留格式但不映射到输出）
+                if (data.find("leftTrack") != data.end() || data.find("rightTrack") != data.end() ||
+                    data.find("swing") != data.end() || data.find("stick") != data.end() ||
+                    data.find("speed_mode") != data.end() || data.find("light_code") != data.end() ||
+                    data.find("hydraulic_lock") != data.end() || data.find("horn") != data.end()) {
+                    RCLCPP_INFO(this->get_logger(), "   新格式字段（保留格式，不映射到输出）:");
+                    if (data.find("leftTrack") != data.end()) {
+                        RCLCPP_INFO(this->get_logger(), "     leftTrack: %.2f", SimpleJsonParser::get_double(data["leftTrack"]));
+                    }
+                    if (data.find("rightTrack") != data.end()) {
+                        RCLCPP_INFO(this->get_logger(), "     rightTrack: %.2f", SimpleJsonParser::get_double(data["rightTrack"]));
+                    }
+                    if (data.find("swing") != data.end()) {
+                        RCLCPP_INFO(this->get_logger(), "     swing: %.2f", SimpleJsonParser::get_double(data["swing"]));
+                    }
+                    if (data.find("stick") != data.end()) {
+                        RCLCPP_INFO(this->get_logger(), "     stick: %.2f", SimpleJsonParser::get_double(data["stick"]));
+                    }
+                    if (data.find("speed_mode") != data.end()) {
+                        RCLCPP_INFO(this->get_logger(), "     speed_mode: %s", data["speed_mode"].c_str());
+                    }
+                    if (data.find("light_code") != data.end()) {
+                        RCLCPP_INFO(this->get_logger(), "     light_code: 0x%02X", SimpleJsonParser::get_int(data["light_code"]));
+                    }
+                    if (data.find("hydraulic_lock") != data.end()) {
+                        RCLCPP_INFO(this->get_logger(), "     hydraulic_lock: %s", SimpleJsonParser::get_bool(data["hydraulic_lock"]) ? "true" : "false");
+                    }
+                    if (data.find("horn") != data.end()) {
+                        RCLCPP_INFO(this->get_logger(), "     horn: %s", SimpleJsonParser::get_bool(data["horn"]) ? "true" : "false");
+                    }
                 }
             }
             
@@ -590,10 +599,10 @@ private:
             std::string serialized_data;
             cmd.SerializeToString(&serialized_data);
             
-            // 创建 ROS2 消息（序列化版本），可配置是否发布
-            auto ros_msg = sa_msgs::msg::ProtoAdapter();
-            ros_msg.pb.assign(serialized_data.begin(), serialized_data.end());
+            // 创建 ROS2 消息（序列化版本），可配置是否发布，关闭时直接跳过构造与发布
             if (publish_vehicle_command_) {  // 根据参数决定是否发布
+                auto ros_msg = sa_msgs::msg::ProtoAdapter();
+                ros_msg.pb.assign(serialized_data.begin(), serialized_data.end());
                 vehicle_cmd_pub_->publish(ros_msg);
             }
             
@@ -653,6 +662,8 @@ private:
     bool publish_vehicle_command_;
     bool publish_vehicle_command_debug_;
     bool publish_chassis_feedback_;
+    // 是否打印详细日志（降低CPU时可关闭）
+    bool verbose_log_;
     
     // 上次的值（用于保持状态）
     control::canbus::Chassis::GearPosition last_gear_;

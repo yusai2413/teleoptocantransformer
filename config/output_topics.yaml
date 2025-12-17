@@ -4,4 +4,5 @@ teleop2can_transformer:
     publish_vehicle_command: false          # /vehicle_command
     publish_vehicle_command_debug: true    # /vehicle_command_debug
     publish_chassis_feedback: true         # cannode/chassis_feedback
+    verbose_log: false                      # 是否打印详细日志（关闭可降低CPU）
 
