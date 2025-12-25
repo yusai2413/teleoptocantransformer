@@ -38,31 +38,54 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   DEPENDENCIES std_msgs
 )
 
-# 添加可执行文件
-add_executable(teleop2can_transformer 
-  src/teleop_converter.cpp
+# 添加可执行文件 - xugong 版本
+add_executable(teleop2can_transformer_xugong 
+  src/teleop_converter_xugong.cpp
   ${PROTOBUF_SOURCES}
 )
 
 # 链接库
-target_link_libraries(teleop2can_transformer
+target_link_libraries(teleop2can_transformer_xugong
   ${PROTOBUF_LIBRARIES}
 )
 
 # 添加依赖
-ament_target_dependencies(teleop2can_transformer
+ament_target_dependencies(teleop2can_transformer_xugong
   rclcpp
   std_msgs
   sa_msgs
 )
 
 # 链接消息库
-rosidl_target_interfaces(teleop2can_transformer
+rosidl_target_interfaces(teleop2can_transformer_xugong
+  ${PROJECT_NAME} "rosidl_typesupport_cpp")
+
+# 添加可执行文件 - changan 版本
+add_executable(teleop2can_transformer_changan 
+  src/teleop_converter_changan.cpp
+  ${PROTOBUF_SOURCES}
+)
+
+# 链接库
+target_link_libraries(teleop2can_transformer_changan
+  ${PROTOBUF_LIBRARIES}
+)
+
+# 添加依赖
+ament_target_dependencies(teleop2can_transformer_changan
+  rclcpp
+  std_msgs
+  sa_msgs
+)
+
+# 链接消息库
+rosidl_target_interfaces(teleop2can_transformer_changan
   ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
 # 安装
 install(TARGETS
-  teleop2can_transformer
+  teleop2can_transformer_xugong
+  teleop2can_transformer_changan
   DESTINATION lib/${PROJECT_NAME}
 )
 
