@@ -316,25 +316,27 @@ private:
             }
             
             // 处理斗杆控制 (stick: -1..1 -> stick_retract_current / stick_extend_current)
-            // -1 到 0：收回方向，映射到 stick_retract_current 700~0
-            // 0 到 1：伸出方向，映射到 stick_extend_current 0~700
+            // 注意：根据你反馈的实际动作方向，这里约定：
+            //   stick > 0 表示斗杆收回；stick < 0 表示斗杆伸出
+            //   收回：0~1 映射到 stick_retract_current 0~700
+            //   伸出：-1~0 映射到 stick_extend_current 700~0
             if (data.find("stick") != data.end()) {
                 double stick_input = clamp(SimpleJsonParser::get_double(data["stick"]), -1.0, 1.0);
                 
                 if (stick_input > 0) {
-                    // 伸出：0~1 映射到 0~700
-                    double current = input_to_current(stick_input, stick_deadzone_);
-                    cmd.set_stick_retract_current(0.0);
-                    cmd.set_stick_extend_current(current);
-                    last_stick_retract_current_ = 0.0;
-                    last_stick_extend_current_ = current;
-                } else if (stick_input < 0) {
-                    // 收回：-1~0 映射到 700~0
+                    // 收回：0~1 映射到 0~700（retract）
                     double current = input_to_current(stick_input, stick_deadzone_);
                     cmd.set_stick_retract_current(current);
                     cmd.set_stick_extend_current(0.0);
                     last_stick_retract_current_ = current;
                     last_stick_extend_current_ = 0.0;
+                } else if (stick_input < 0) {
+                    // 伸出：-1~0 映射到 700~0（extend）
+                    double current = input_to_current(stick_input, stick_deadzone_);
+                    cmd.set_stick_retract_current(0.0);
+                    cmd.set_stick_extend_current(current);
+                    last_stick_retract_current_ = 0.0;
+                    last_stick_extend_current_ = current;
                 } else {
                     // 无输入
                     cmd.set_stick_retract_current(0.0);
@@ -414,70 +416,94 @@ private:
                 cmd.set_rotate_right_current(last_rotate_right_current_);
             }
             
-            // 处理左履带控制 (leftTrack: -1..1 -> left_track_forward_current / left_track_backward_current)
-            // -1 到 0：后退方向，映射到 left_track_backward_current 700~0
-            // 0 到 1：前进方向，映射到 left_track_forward_current 0~700
-            if (data.find("leftTrack") != data.end()) {
-                double left_track_input = clamp(SimpleJsonParser::get_double(data["leftTrack"]), -1.0, 1.0);
-                
-                if (left_track_input > 0) {
-                    // 前进：0~1 映射到 0~700
-                    double current = input_to_current(left_track_input, track_deadzone_);
-                    cmd.set_left_track_forward_current(current);
-                    cmd.set_left_track_backward_current(0.0);
-                    last_left_track_forward_current_ = current;
-                    last_left_track_backward_current_ = 0.0;
-                } else if (left_track_input < 0) {
-                    // 后退：-1~0 映射到 700~0
-                    double current = input_to_current(left_track_input, track_deadzone_);
-                    cmd.set_left_track_forward_current(0.0);
-                    cmd.set_left_track_backward_current(current);
-                    last_left_track_forward_current_ = 0.0;
-                    last_left_track_backward_current_ = current;
-                } else {
-                    // 无输入
-                    cmd.set_left_track_forward_current(0.0);
-                    cmd.set_left_track_backward_current(0.0);
-                    last_left_track_forward_current_ = 0.0;
-                    last_left_track_backward_current_ = 0.0;
+            // 处理左履带控制 (leftTrack/left_track: -1..1 -> left_track_forward_current / left_track_backward_current)
+            // -1 到 0：前进方向，映射到 left_track_forward_current 700~0
+            // 0 到 1：后退方向，映射到 left_track_backward_current 0~700
+            {
+                bool has_left_track = false;
+                double left_track_input = 0.0;
+                auto it_left_camel = data.find("leftTrack");
+                auto it_left_snake = data.find("left_track");
+                if (it_left_camel != data.end()) {
+                    left_track_input = clamp(SimpleJsonParser::get_double(it_left_camel->second), -1.0, 1.0);
+                    has_left_track = true;
+                } else if (it_left_snake != data.end()) {
+                    left_track_input = clamp(SimpleJsonParser::get_double(it_left_snake->second), -1.0, 1.0);
+                    has_left_track = true;
                 }
-            } else {
-                // 保持上次值
-                cmd.set_left_track_forward_current(last_left_track_forward_current_);
-                cmd.set_left_track_backward_current(last_left_track_backward_current_);
+
+                if (has_left_track) {
+                    if (left_track_input > 0) {
+                        // 后退：0~1 映射到 0~700
+                        double current = input_to_current(left_track_input, track_deadzone_);
+                        cmd.set_left_track_forward_current(0.0);
+                        cmd.set_left_track_backward_current(current);
+                        last_left_track_forward_current_ = 0.0;
+                        last_left_track_backward_current_ = current;
+                    } else if (left_track_input < 0) {
+                        // 前进：-1~0 映射到 700~0
+                        double current = input_to_current(left_track_input, track_deadzone_);
+                        cmd.set_left_track_forward_current(current);
+                        cmd.set_left_track_backward_current(0.0);
+                        last_left_track_forward_current_ = current;
+                        last_left_track_backward_current_ = 0.0;
+                    } else {
+                        // 无输入
+                        cmd.set_left_track_forward_current(0.0);
+                        cmd.set_left_track_backward_current(0.0);
+                        last_left_track_forward_current_ = 0.0;
+                        last_left_track_backward_current_ = 0.0;
+                    }
+                } else {
+                    // 保持上次值
+                    cmd.set_left_track_forward_current(last_left_track_forward_current_);
+                    cmd.set_left_track_backward_current(last_left_track_backward_current_);
+                }
             }
             
-            // 处理右履带控制 (rightTrack: -1..1 -> right_track_forward_current / right_track_backward_current)
-            // -1 到 0：后退方向，映射到 right_track_backward_current 700~0
-            // 0 到 1：前进方向，映射到 right_track_forward_current 0~700
-            if (data.find("rightTrack") != data.end()) {
-                double right_track_input = clamp(SimpleJsonParser::get_double(data["rightTrack"]), -1.0, 1.0);
-                
-                if (right_track_input > 0) {
-                    // 前进：0~1 映射到 0~700
-                    double current = input_to_current(right_track_input, track_deadzone_);
-                    cmd.set_right_track_forward_current(current);
-                    cmd.set_right_track_backward_current(0.0);
-                    last_right_track_forward_current_ = current;
-                    last_right_track_backward_current_ = 0.0;
-                } else if (right_track_input < 0) {
-                    // 后退：-1~0 映射到 700~0
-                    double current = input_to_current(right_track_input, track_deadzone_);
-                    cmd.set_right_track_forward_current(0.0);
-                    cmd.set_right_track_backward_current(current);
-                    last_right_track_forward_current_ = 0.0;
-                    last_right_track_backward_current_ = current;
-                } else {
-                    // 无输入
-                    cmd.set_right_track_forward_current(0.0);
-                    cmd.set_right_track_backward_current(0.0);
-                    last_right_track_forward_current_ = 0.0;
-                    last_right_track_backward_current_ = 0.0;
+            // 处理右履带控制 (rightTrack/right_track: -1..1 -> right_track_forward_current / right_track_backward_current)
+            // -1 到 0：前进方向，映射到 right_track_forward_current 700~0
+            // 0 到 1：后退方向，映射到 right_track_backward_current 0~700
+            {
+                bool has_right_track = false;
+                double right_track_input = 0.0;
+                auto it_right_camel = data.find("rightTrack");
+                auto it_right_snake = data.find("right_track");
+                if (it_right_camel != data.end()) {
+                    right_track_input = clamp(SimpleJsonParser::get_double(it_right_camel->second), -1.0, 1.0);
+                    has_right_track = true;
+                } else if (it_right_snake != data.end()) {
+                    right_track_input = clamp(SimpleJsonParser::get_double(it_right_snake->second), -1.0, 1.0);
+                    has_right_track = true;
                 }
-            } else {
-                // 保持上次值
-                cmd.set_right_track_forward_current(last_right_track_forward_current_);
-                cmd.set_right_track_backward_current(last_right_track_backward_current_);
+
+                if (has_right_track) {
+                    if (right_track_input > 0) {
+                        // 后退：0~1 映射到 0~700
+                        double current = input_to_current(right_track_input, track_deadzone_);
+                        cmd.set_right_track_forward_current(0.0);
+                        cmd.set_right_track_backward_current(current);
+                        last_right_track_forward_current_ = 0.0;
+                        last_right_track_backward_current_ = current;
+                    } else if (right_track_input < 0) {
+                        // 前进：-1~0 映射到 700~0
+                        double current = input_to_current(right_track_input, track_deadzone_);
+                        cmd.set_right_track_forward_current(current);
+                        cmd.set_right_track_backward_current(0.0);
+                        last_right_track_forward_current_ = current;
+                        last_right_track_backward_current_ = 0.0;
+                    } else {
+                        // 无输入
+                        cmd.set_right_track_forward_current(0.0);
+                        cmd.set_right_track_backward_current(0.0);
+                        last_right_track_forward_current_ = 0.0;
+                        last_right_track_backward_current_ = 0.0;
+                    }
+                } else {
+                    // 保持上次值
+                    cmd.set_right_track_forward_current(last_right_track_forward_current_);
+                    cmd.set_right_track_backward_current(last_right_track_backward_current_);
+                }
             }
             
             // 处理紧急停止
