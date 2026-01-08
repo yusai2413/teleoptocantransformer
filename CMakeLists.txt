@@ -82,10 +82,33 @@ ament_target_dependencies(teleop2can_transformer_changan
 rosidl_target_interfaces(teleop2can_transformer_changan
   ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
+# 添加可执行文件 - xiaosong 版本
+add_executable(teleop2can_transformer_xiaosong 
+  src/teleop_converter_xiaosong.cpp
+  ${PROTOBUF_SOURCES}
+)
+
+# 链接库
+target_link_libraries(teleop2can_transformer_xiaosong
+  ${PROTOBUF_LIBRARIES}
+)
+
+# 添加依赖
+ament_target_dependencies(teleop2can_transformer_xiaosong
+  rclcpp
+  std_msgs
+  sa_msgs
+)
+
+# 链接消息库
+rosidl_target_interfaces(teleop2can_transformer_xiaosong
+  ${PROJECT_NAME} "rosidl_typesupport_cpp")
+
 # 安装
 install(TARGETS
   teleop2can_transformer_xugong
   teleop2can_transformer_changan
+  teleop2can_transformer_xiaosong
   DESTINATION lib/${PROJECT_NAME}
 )
 
