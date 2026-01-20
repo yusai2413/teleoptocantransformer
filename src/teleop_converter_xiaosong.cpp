@@ -2,6 +2,7 @@
 #include <std_msgs/msg/string.hpp>
 #include <sa_msgs/msg/proto_adapter.hpp>
 #include "teleoptocantransformer/msg/vehicle_command.hpp"
+#include <geometry_msgs/msg/vector3.hpp>  // 挖掘机相对关节角 /excavator_joint_angles
 #include <rclcpp/qos.hpp>
 #include <chrono>
 #include <cmath>
@@ -99,6 +100,17 @@ public:
             "cannode/chassis_feedback",
             chassis_qos
         );
+
+        // 订阅挖掘机相对关节角（来自 multi_tilt_imu_node）
+        // 话题：/excavator_joint_angles，消息：geometry_msgs/Vector3
+        // x = 大臂相对车身 (deg), y = 斗杆相对大臂 (deg), z = 铲斗相对斗杆 (deg)
+        excavator_angles_sub_ = this->create_subscription<geometry_msgs::msg::Vector3>(
+            "/excavator_joint_angles",
+            rclcpp::QoS(10).reliable(),
+            std::bind(
+                &Teleop2CanTransformerXiaosong::excavator_angles_callback,
+                this,
+                std::placeholders::_1));
         
         RCLCPP_INFO(this->get_logger(), "QoS 配置: /controls/teleop (BEST_EFFORT), /vehicle_command (RELIABLE)");
         RCLCPP_INFO(this->get_logger(), "订阅话题: /controls/teleop");
@@ -239,9 +251,22 @@ private:
         oss << "\"vehicle_speed\":" << msg.walk_motor_speed * 3.6 << ",";
         oss << "\"walk_motor_enable\":" << bool_to_str(msg.walk_motor_enable) << ",";
 
-        // 角度信息
-        oss << "\"boom_angle\":" << msg.boom_angle << ",";
-        oss << "\"bucket_angle\":" << msg.bucket_angle;
+        // 角度信息（优先使用挖掘机 IMU 计算得到的相对角）
+        double boom_angle = msg.boom_angle;
+        double bucket_angle = msg.bucket_angle;
+        double stick_angle = 0.0;
+        {
+            std::lock_guard<std::mutex> lk(excavator_angle_mutex_);
+            if (excavator_angles_valid_) {
+                // x: 大臂对车身, y: 斗杆对大臂, z: 铲斗对斗杆
+                boom_angle = excavator_boom_angle_deg_;
+                stick_angle = excavator_stick_angle_deg_;
+                bucket_angle = excavator_bucket_angle_deg_;
+            }
+        }
+        oss << "\"boom_angle\":" << boom_angle << ",";
+        oss << "\"stick_angle\":" << stick_angle << ",";
+        oss << "\"bucket_angle\":" << bucket_angle;
 
         oss << "}";
         return oss.str();
@@ -605,6 +630,23 @@ private:
     bool publish_chassis_feedback_;
     // 是否打印详细日志（降低CPU时可关闭）
     bool verbose_log_;
+
+    // 挖掘机关节角反馈（来自 /excavator_joint_angles）
+    rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr excavator_angles_sub_;
+    mutable std::mutex excavator_angle_mutex_;
+    bool excavator_angles_valid_{false};
+    double excavator_boom_angle_deg_{0.0};    // 大臂相对车身
+    double excavator_stick_angle_deg_{0.0};   // 斗杆相对大臂
+    double excavator_bucket_angle_deg_{0.0};  // 铲斗相对斗杆
+
+    void excavator_angles_callback(const geometry_msgs::msg::Vector3::SharedPtr msg)
+    {
+        std::lock_guard<std::mutex> lk(excavator_angle_mutex_);
+        excavator_boom_angle_deg_ = msg->x;
+        excavator_stick_angle_deg_ = msg->y;
+        excavator_bucket_angle_deg_ = msg->z;
+        excavator_angles_valid_ = true;
+    }
     
     // 上次的值（用于保持状态）
     double last_arm_up_current_;
